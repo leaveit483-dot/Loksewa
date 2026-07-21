@@ -1,0 +1,681 @@
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const LoksewaApp());
+}
+
+class LoksewaApp extends StatelessWidget {
+  const LoksewaApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Loksewa Tayari - Binod Sir',
+      theme: ThemeData(
+        primarySwatch: Colors.red,
+        primaryColor: const Color(0xFFDC143C), // Crimson Red
+        scaffoldBackgroundColor: const Color(0xFFF4F6F9),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF1E3A8A), // Deep Blue
+          foregroundColor: Colors.white,
+          elevation: 2,
+        ),
+      ),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.hasData) {
+          return const HomeScreen();
+        }
+        return const LoginScreen();
+      },
+    );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _nameController = TextEditingController();
+  bool isSignUp = false;
+  bool isLoading = false;
+
+  Future<void> _submit() async {
+    setState(() => isLoading = true);
+    try {
+      if (isSignUp) {
+        UserCredential credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: _emailController.text.trim(),
+          password: _passwordController.text.trim(),
+        );
+        await FirebaseFirestore.instance.collection('users').doc(credential.user!.uid).set({
+          'name': _nameController.text.trim(),
+          'email': _emailController.text.trim(),
+          'isPaid': false,
+          'role': 'user',
+          'txnId': '',
+          'lastActive': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: _emailController.text.trim(),
+          password: _passwordController.text.trim(),
+        );
+        await FirebaseFirestore.instance.collection('users').doc(FirebaseAuth.instance.currentUser!.uid).update({
+          'lastActive': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isSignUp ? 'नयाँ एकाउन्ट बनाउनुहोस्' : 'लोगिन गर्नुहोस् (Login)'),
+        centerTitle: true,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          children: [
+            const CircleAvatar(
+              radius: 40,
+              backgroundColor: Color(0xFF1E3A8A),
+              child: Icon(Icons.school, size: 50, color: Colors.white),
+            ),
+            const SizedBox(height: 16),
+            const Text('लोकसेवा तयारी - Binod Sir', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+            const Text('Doti, Sikhar-11, Natab', style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 30),
+            if (isSignUp) ...[
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'तपाईंको पूरा नाम', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person)),
+              ),
+              const SizedBox(height: 15),
+            ],
+            TextField(
+              controller: _emailController,
+              decoration: const InputDecoration(labelText: 'Email Address', border: OutlineInputBorder(), prefixIcon: Icon(Icons.email)),
+            ),
+            const SizedBox(height: 15),
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder(), prefixIcon: Icon(Icons.lock)),
+            ),
+            const SizedBox(height: 25),
+            isLoading
+                ? const CircularProgressIndicator()
+                : SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A)),
+                      onPressed: _submit,
+                      child: Text(isSignUp ? 'खाता खोल्नुहोस् (Sign Up)' : 'लोगिन गर्नुहोस् (Login)', style: const TextStyle(color: Colors.white, fontSize: 16)),
+                    ),
+                  ),
+            TextButton(
+              onPressed: () => setState(() => isSignUp = !isSignUp),
+              child: Text(isSignUp ? 'पहिले नै एकाउन्ट छ? Login गर्नुहोस्' : 'एकाउन्ट छैन? नयाँ बनाउनुहोस्'),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _currentIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+        var userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        bool isPaid = userData['isPaid'] ?? false;
+        String role = userData['role'] ?? 'user';
+
+        final List<Widget> pages = [
+          DashboardTab(userData: userData, isPaid: isPaid, role: role),
+          QuizTab(isPaid: isPaid),
+          const AboutTab(),
+        ];
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('लोकसेवा तयारी - Binod Sir'),
+            centerTitle: true,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                onPressed: () => FirebaseAuth.instance.signOut(),
+              ),
+            ],
+          ),
+          drawer: AppDrawer(role: role),
+          body: pages[_currentIndex],
+          bottomNavigationBar: BottomNavigationBar(
+            currentIndex: _currentIndex,
+            selectedItemColor: const Color(0xFFDC143C),
+            unselectedItemColor: Colors.grey,
+            onTap: (index) => setState(() => _currentIndex = index),
+            items: const [
+              BottomNavigationBarItem(icon: Icon(Icons.home), label: 'गृह (Home)'),
+              BottomNavigationBarItem(icon: Icon(Icons.quiz), label: 'क्विज (Quiz)'),
+              BottomNavigationBarItem(icon: Icon(Icons.person), label: 'संस्थापक (Founder)'),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class DashboardTab extends StatelessWidget {
+  final Map<String, dynamic> userData;
+  final bool isPaid;
+  final String role;
+
+  const DashboardTab({super.key, required this.userData, required this.isPaid, required this.role});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1E3A8A), Color(0xFFDC143C)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAlignment.start,
+              children: [
+                Text('नमस्ते, ${userData['name'] ?? 'परीक्षार्थी'}!', style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text('लोकसेवा आयोग परीक्षाको पूर्ण तयारी अब मोबाइलबाटै गर्नुहोस्।', style: TextStyle(color: Colors.white70, fontSize: 14)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          if (role == 'admin') ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red, padding: const EdgeInsets.all(14)),
+                icon: const Icon(Icons.admin_panel_settings, color: Colors.white),
+                label: const Text('Binod Sir Admin Panel (सबै कंट्रोल गर्ने)', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminPanel())),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          Card(
+            color: isPaid ? const Color(0xFFE8F5E9) : const Color(0xFFFFF3E0),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: Icon(isPaid ? Icons.check_circle : Icons.lock, color: isPaid ? Colors.green : Colors.orange, size: 36),
+              title: Text(isPaid ? 'फुल मोडल सेट अनलक छ (Paid)' : 'फुल मोडल सेट - रु. १० मात्र', style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text(isPaid ? 'सबै सुविधाहरू उपलब्ध छन्' : 'eSewa: 9813847499 मा भुक्तानी गरी अनलक गर्नुहोस्'),
+              trailing: isPaid
+                  ? const Chip(label: Text('ACTIVE', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)))
+                  : ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF60BB46)),
+                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentScreen())),
+                      child: const Text('तिर्नुहोस्', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text('मुख्य सुविधाहरू (Features)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+          const SizedBox(height: 12),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            children: [
+              _buildFeatureCard(
+                context,
+                title: 'वस्तुगत प्रश्नोत्तर (MCQs)',
+                icon: Icons.lightbulb,
+                color: Colors.orange,
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => QuizScreen(isPaid: isPaid))),
+              ),
+              _buildFeatureCard(
+                context,
+                title: 'प्रिमियम अनलक (रु. १०)',
+                icon: Icons.star,
+                color: Colors.amber[800]!,
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentScreen())),
+              ),
+              _buildFeatureCard(
+                context,
+                title: 'पाठ्यक्रम (Syllabus)',
+                icon: Icons.menu_book,
+                color: Colors.blue,
+                onTap: () {},
+              ),
+              _buildFeatureCard(
+                context,
+                title: 'संस्थापक (Founder)',
+                icon: Icons.person,
+                color: Colors.purple,
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutScreen())),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeatureCard(BuildContext context, {required String title, required IconData icon, required Color color, required VoidCallback onTap}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.15), blurRadius: 6, spreadRadius: 2)],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircleAvatar(backgroundColor: color.withOpacity(0.15), radius: 26, child: Icon(icon, color: color, size: 28)),
+            const SizedBox(height: 10),
+            Text(title, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class PaymentScreen extends StatelessWidget {
+  const PaymentScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final txnController = TextEditingController();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('शुल्क भुक्तानी (Payment)')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 8)],
+              ),
+              child: Column(
+                children: const [
+                  Icon(Icons.account_balance_wallet, size: 60, color: Color(0xFF60BB46)),
+                  SizedBox(height: 10),
+                  Text('eSewa Payment', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF60BB46))),
+                  SizedBox(height: 10),
+                  Text('शुल्क: रु. १० (Rs. 10 Only)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red)),
+                  Divider(height: 25),
+                  ListTile(
+                    leading: Icon(Icons.phone_android, color: Colors.green),
+                    title: Text('eSewa ID / Number'),
+                    subtitle: Text('9813847499', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black)),
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.person, color: Colors.blue),
+                    title: Text('प्राप्तकर्ता (Account Holder)'),
+                    subtitle: Text('Binod Sir (Doti, Sikhar-11, Natab)'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 25),
+            TextField(
+              controller: txnController,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                labelText: 'eSewa Transaction ID / Sender Name',
+                hintText: 'eSewa मा रु.१० पठाएपछि प्राप्त कोड हाल्नुहोस्',
+              ),
+            ),
+            const SizedBox(height: 15),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF60BB46)),
+                onPressed: () async {
+                  if (txnController.text.isNotEmpty) {
+                    final uid = FirebaseAuth.instance.currentUser!.uid;
+                    await FirebaseFirestore.instance.collection('users').doc(uid).update({
+                      'txnId': txnController.text.trim(),
+                    });
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('सुचना पठाउनु भएकोमा धन्यवाद! Binod Sir ले भेरिफाई गरेपछि एप पूर्ण अनलक हुनेछ।')),
+                      );
+                      Navigator.pop(context);
+                    }
+                  }
+                },
+                child: const Text('भुक्तानी पुष्टि गर्नुहोस् (Submit)', style: TextStyle(color: Colors.white, fontSize: 16)),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class QuizTab extends StatelessWidget {
+  final bool isPaid;
+  const QuizTab({super.key, required this.isPaid});
+
+  @override
+  Widget build(BuildContext context) {
+    return QuizScreen(isPaid: isPaid);
+  }
+}
+
+class QuizScreen extends StatefulWidget {
+  final bool isPaid;
+  const QuizScreen({super.key, required this.isPaid});
+
+  @override
+  State<QuizScreen> createState() => _QuizScreenState();
+}
+
+class _QuizScreenState extends State<QuizScreen> {
+  int _questionIndex = 0;
+  int _score = 0;
+
+  final List<Map<String, dynamic>> _questions = [
+    {
+      'question': 'नेपालको वर्तमान संविधान कहिले जारी भयो?',
+      'options': ['२०७२ असोज ३', '२०७२ कात्तिक ३', '२०७१ असोज ३', '२०७३ असोज ३'],
+      'answer': 0,
+    },
+    {
+      'question': 'डोटी जिल्ला कुन प्रदेशमा पर्दछ?',
+      'options': ['कर्णाली प्रदेश', 'सुदूरपश्चिम प्रदेश', 'लुम्बिनी प्रदेश', 'बागमती प्रदेश'],
+      'answer': 1,
+    },
+    {
+      'question': 'नेपालको क्षेत्रफल कति वर्ग कि.मी. रहेको छ?',
+      'options': ['१,४७,१८१', '१,४७,५१६', '१,५१,१८१', '१,४५,१८१'],
+      'answer': 0,
+    }
+  ];
+
+  void _answerQuestion(int selectedIndex) {
+    if (selectedIndex == _questions[_questionIndex]['answer']) {
+      _score++;
+    }
+    setState(() {
+      _questionIndex++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: _questionIndex >= _questions.length
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.emoji_events, size: 80, color: Colors.amber),
+                    const SizedBox(height: 10),
+                    const Text('अभ्यास पूरा भयो!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text('तपाईंको नतिजा: $_score / ${_questions.length}', style: const TextStyle(fontSize: 18)),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC143C)),
+                      onPressed: () => setState(() { _questionIndex = 0; _score = 0; }),
+                      child: const Text('पुनः प्रयास गर्नुहोस्', style: TextStyle(color: Colors.white)),
+                    )
+                  ],
+                ),
+              )
+            : Column(
+                crossAxisAlignment: CrossAlignment.stretch,
+                children: [
+                  LinearProgressIndicator(
+                    value: (_questionIndex + 1) / _questions.length,
+                    backgroundColor: Colors.grey[300],
+                    color: const Color(0xFFDC143C),
+                  ),
+                  const SizedBox(height: 20),
+                  Text('प्रश्न ${_questionIndex + 1} / ${_questions.length}', style: const TextStyle(color: Colors.grey)),
+                  const SizedBox(height: 10),
+                  Text(_questions[_questionIndex]['question'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 20),
+                  ...List.generate(_questions[_questionIndex]['options'].length, (index) {
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        title: Text(_questions[_questionIndex]['options'][index]),
+                        onTap: () => _answerQuestion(index),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class AboutTab extends StatelessWidget {
+  const AboutTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const AboutScreen();
+  }
+}
+
+class AboutScreen extends StatelessWidget {
+  const AboutScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
+        child: Card(
+          elevation: 4,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              children: [
+                const CircleAvatar(
+                  radius: 45,
+                  backgroundColor: Color(0xFF1E3A8A),
+                  child: Icon(Icons.person, size: 50, color: Colors.white),
+                ),
+                const SizedBox(height: 16),
+                const Text('Binod Sir', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E3A8A))),
+                const Text('संस्थापक तथा निर्देशक (Founder)', style: TextStyle(color: Colors.grey)),
+                const Divider(height: 30),
+                const ListTile(
+                  leading: Icon(Icons.location_on, color: Color(0xFFDC143C)),
+                  title: Text('ठेगाना (Address)'),
+                  subtitle: Text('डोटी, शिखर-११, नाताब (Doti, Sikhar 11 Natab, Nepal)'),
+                ),
+                const ListTile(
+                  leading: Icon(Icons.phone, color: Colors.green),
+                  title: Text('eSewa / Contact'),
+                  subtitle: Text('9813847499'),
+                ),
+                const ListTile(
+                  leading: Icon(Icons.school, color: Color(0xFF1E3A8A)),
+                  title: Text('एपको उद्देश्य'),
+                  subtitle: Text('लोकसेवा परीक्षार्थीहरूलाई सर्वसुलभ रूपमा तयारी गराउनु।'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AdminPanel extends StatelessWidget {
+  const AdminPanel({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Binod Sir Admin Control Panel')),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('users').snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+
+          var users = snapshot.data!.docs;
+
+          return ListView.builder(
+            itemCount: users.length,
+            itemBuilder: (context, index) {
+              var user = users[index].data() as Map<String, dynamic>;
+              String docId = users[index].id;
+              bool isPaid = user['isPaid'] ?? false;
+              String txnId = user['txnId'] ?? '';
+
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: ListTile(
+                  title: Text(user['name'] ?? 'Un-named User', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('Email: ${user['email']}\nTxn ID: ${txnId.isEmpty ? "None" : txnId}\nStatus: ${isPaid ? "UNLOCKED" : "LOCKED"}'),
+                  isThreeLine: true,
+                  trailing: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: isPaid ? Colors.red : Colors.green),
+                    onPressed: () {
+                      FirebaseFirestore.instance.collection('users').doc(docId).update({'isPaid': !isPaid});
+                    },
+                    child: Text(isPaid ? 'Lock Garne' : 'Approve (Rs.10)', style: const TextStyle(color: Colors.white)),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class AppDrawer extends StatelessWidget {
+  final String role;
+  const AppDrawer({super.key, required this.role});
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          const UserAccountsDrawerHeader(
+            decoration: BoxDecoration(color: Color(0xFF1E3A8A)),
+            accountName: Text('लोकसेवा तयारी एप', style: TextStyle(fontWeight: FontWeight.bold)),
+            accountEmail: Text('Founder: Binod Sir (Doti)'),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Icon(Icons.school, color: Color(0xFF1E3A8A), size: 36),
+            ),
+          ),
+          if (role == 'admin')
+            ListTile(
+              leading: const Icon(Icons.admin_panel_settings, color: Colors.red),
+              title: const Text('Binod Sir Admin Panel'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminPanel()));
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.payment, color: Colors.green),
+            title: const Text('Fee Payment (रु. १०)'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const PaymentScreen()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.info, color: Colors.blue),
+            title: const Text('About Founder'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const AboutScreen()));
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
